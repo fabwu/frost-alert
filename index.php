@@ -1,6 +1,6 @@
 <?php
 
-$config = include('config.php'); 
+$config = include('config.php');
 $current_month = intval((new DateTimeImmutable('now'))->format('m'));
 
 // Don't send frost alert from October to March
@@ -18,7 +18,7 @@ curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_URL, BASE_URL . '/oauth/v1/accesstoken?grant_type=client_credentials');
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Length: 0']);
-curl_setopt($ch, CURLOPT_USERPWD, $config['srf_key']. ":" . $config['srf_secret']);  
+curl_setopt($ch, CURLOPT_USERPWD, $config['srf_key']. ":" . $config['srf_secret']);
 
 $result = curl_exec($ch);
 
@@ -32,12 +32,27 @@ if(!$access_token) {
     throw new Exception('Invalid access token');
 }
 
-// get forecast
+// get geolocation id
 $params = http_build_query([
    'latitude' => $config['latitude'],
    'longitude' => $config['longitude'],
 ]);
-curl_setopt($ch, CURLOPT_URL, BASE_URL . '/forecasts/v1.0/weather/7day?' . $params);
+curl_setopt($ch, CURLOPT_URL, BASE_URL . '/srf-meteo/geolocations?' . $params);
+curl_setopt($ch, CURLOPT_POST, false);
+curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . $access_token]);
+
+$result = curl_exec($ch);
+
+if(curl_error($ch)) {
+    throw new Exception('Getting geolocation failed - ' . curl_error($ch));
+}
+
+$geolocations = json_decode($result, true);
+
+$id = $geolocations[0]['id'];
+
+// get forecast
+curl_setopt($ch, CURLOPT_URL, BASE_URL . '/srf-meteo/forecast/' . $id);
 curl_setopt($ch, CURLOPT_POST, false);
 curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . $access_token]);
 
@@ -47,28 +62,13 @@ if(curl_error($ch)) {
     throw new Exception('Getting forecast failed - ' . curl_error($ch));
 }
 
-$forecast = json_decode($result, true);
-
 curl_close($ch);
 
-// parse forecast
-$next_day = (new DateTimeImmutable())
-                ->add(DateInterval::createFromDateString('1 day'))
-                ->format('Y-m-d');
+$forecast = json_decode($result, true);
 
-$min_temp = NULL;
-
-foreach ($forecast['7days'] as $day) {
-    if($day['date'] == $next_day) {
-        foreach ($day['values'] as $value) {
-            if(isset($value['ttn'])) {
-                $min_temp = floatval($value['ttn']);
-                break;
-            }
-        }
-        break;
-    }
-}
+$tomorrow = 1;
+$min_temp_label = 'TN_C';
+$min_temp = $forecast['forecast']['day'][$tomorrow][$min_temp_label];
 
 if($min_temp == NULL) {
     throw new Exception('Getting forecast failed');
@@ -87,7 +87,7 @@ if($min_temp < $config['frost_threshold_deg']) {
 	];
 
 	$sent_success = mail($to, $subject, $message, $headers);
-	
+
 	if(!$sent_success) {
 		throw new Exception('Sending mail failed');
 	}
